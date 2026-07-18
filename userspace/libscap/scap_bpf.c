@@ -129,6 +129,31 @@ static int bpf_map_lookup_elem(int fd, const void *key, void *value)
 	return sys_bpf(BPF_MAP_LOOKUP_ELEM, &attr, sizeof(attr));
 }
 
+static int bpf_map_get_next_key(int fd, void *key, void *next_key)
+{
+	union bpf_attr attr;
+
+	bzero(&attr, sizeof(attr));
+
+	attr.map_fd = fd;
+	attr.key = (unsigned long) key;
+	attr.next_key = (unsigned long) next_key;
+
+	return sys_bpf(BPF_MAP_GET_NEXT_KEY, &attr, sizeof(attr));
+}
+
+static int bpf_map_delete_elem(int fd, const void *key)
+{
+	union bpf_attr attr;
+
+	bzero(&attr, sizeof(attr));
+
+	attr.map_fd = fd;
+	attr.key = (unsigned long) key;
+
+	return sys_bpf(BPF_MAP_DELETE_ELEM, &attr, sizeof(attr));
+}
+
 static int bpf_map_create(enum bpf_map_type map_type,
 			  int key_size, int value_size, int max_entries,
 			  uint32_t map_flags)
@@ -504,6 +529,66 @@ static int write_kprobe_events(const char *val)
 	return ret;
 }
 
+static int attach_perf_event_prog(scap_t *handle, int fd, int sample_freq)
+{
+	struct perf_event_attr attr_type_sw = {
+		.sample_freq = sample_freq,
+		.freq = 1,
+		.type = PERF_TYPE_SOFTWARE,
+		.config = PERF_COUNT_SW_CPU_CLOCK,
+	};
+	int *fds;
+	int cpu;
+
+	if(handle->m_ncpus <= 0)
+	{
+		snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "invalid cpu count for perf event attach");
+		return SCAP_FAILURE;
+	}
+
+	fds = calloc((size_t)handle->m_ncpus, sizeof(int));
+	if(!fds)
+	{
+		snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "calloc for perf event fds failed");
+		return SCAP_FAILURE;
+	}
+
+	for(cpu = 0; cpu < handle->m_ncpus; cpu++)
+	{
+		int efd = sys_perf_event_open(&attr_type_sw, /*pid=*/-1, /*cpu=*/cpu, -1, 0);
+		if(efd < 0)
+		{
+			snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "event fd %d err %s", efd, scap_strerror(handle, errno));
+			free(fds);
+			return SCAP_FAILURE;
+		}
+
+		if(ioctl(efd, PERF_EVENT_IOC_SET_BPF, fd) < 0)
+		{
+			close(efd);
+			snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "PERF_EVENT_IOC_SET_BPF: %s", scap_strerror(handle, errno));
+			free(fds);
+			return SCAP_FAILURE;
+		}
+
+		fds[cpu] = efd;
+	}
+
+	/* Enable after all CPUs are attached to avoid losing early samples. */
+	for(cpu = 0; cpu < handle->m_ncpus; cpu++)
+	{
+		if(ioctl(fds[cpu], PERF_EVENT_IOC_ENABLE, 0) < 0)
+		{
+			snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "PERF_EVENT_IOC_ENABLE: %s", scap_strerror(handle, errno));
+			free(fds);
+			return SCAP_FAILURE;
+		}
+	}
+
+	free(fds);
+	return SCAP_SUCCESS;
+}
+
 static int32_t load_tracepoint(scap_t* handle, const char *event, struct bpf_insn *prog, int size)
 {
 	struct perf_event_attr attr = {};
@@ -520,6 +605,7 @@ static int32_t load_tracepoint(scap_t* handle, const char *event, struct bpf_ins
 	bool is_kretprobe = strncmp(event, "kretprobe/", 10) == 0;
 	bool is_tracepoint = strncmp(event, "tracepoint/", 11) == 0;
 	bool is_raw_tracepoint = strncmp(event, "raw_tracepoint/", 15) == 0;
+	bool is_perf_event = strncmp(event, "perf_event", 10) == 0;
 
 	insns_cnt = size / sizeof(struct bpf_insn);
 	char *full_event = event;
@@ -575,6 +661,10 @@ static int32_t load_tracepoint(scap_t* handle, const char *event, struct bpf_ins
 			strcat(buf, event);
 			strcat(buf, "/id");
 		}
+	}
+	else if(is_perf_event)
+	{
+		program_type = BPF_PROG_TYPE_PERF_EVENT;
 	}
 
 	if(*event == 0)
@@ -638,6 +728,11 @@ static int32_t load_tracepoint(scap_t* handle, const char *event, struct bpf_ins
 		handle->m_bpf_fillers[prog_id] = true;
 
 		return SCAP_SUCCESS;
+	}
+
+	if(is_perf_event)
+	{
+		return attach_perf_event_prog(handle, fd, 97);
 	}
 
 	if(raw_tp)
@@ -879,7 +974,8 @@ static int32_t load_bpf_file(scap_t *handle)
 		if(memcmp(shname, "tracepoint/", sizeof("tracepoint/") - 1) == 0 ||
 		   memcmp(shname, "raw_tracepoint/", sizeof("raw_tracepoint/") - 1) == 0 ||
 		   memcmp(shname, "kprobe/", sizeof("kprobe/") - 1) == 0 ||
-		   memcmp(shname, "kretprobe/", sizeof("kretprobe/") - 1) == 0)
+		   memcmp(shname, "kretprobe/", sizeof("kretprobe/") - 1) == 0 ||
+		   memcmp(shname, "perf_event", 10) == 0)
 		{
 			int load_result = load_tracepoint(handle, shname, data->d_buf, data->d_size);
 			if((memcmp(shname, "kprobe/", sizeof("kprobe/") - 1) == 0 ||
@@ -1893,5 +1989,148 @@ int32_t scap_bpf_handle_eventmask(scap_t* handle, uint32_t op, uint32_t event_id
 		return SCAP_FAILURE;
 	}
 
+	return SCAP_SUCCESS;
+}
+int32_t scap_bpf_set_cpu_sampling(scap_t *handle, uint32_t start)
+{
+	uint32_t zero = 0;
+	int err = bpf_map_update_elem(handle->m_bpf_map_fds[PROFILE_CPU_SAMPLING_CTRL], &zero, &start, BPF_ANY);
+	if(err < 0)
+	{
+		snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "failure set cpu sampling: %s", scap_strerror(handle, errno));
+		return SCAP_FAILURE;
+	}
+	return SCAP_SUCCESS;
+}
+
+int32_t scap_bpf_get_profile_data(scap_t *handle, struct sample_key key, struct bpf_profile_data *profile_data)
+{
+	int count_map = handle->m_bpf_map_fds[PROFILE_CPU_COUNTS];
+	int stack_map = handle->m_bpf_map_fds[PROFILE_CPU_STACKS];
+
+	profile_data->pid = key.pid;
+	bpf_map_lookup_elem(count_map, &key, &(profile_data->count));
+	bpf_map_lookup_elem(stack_map, &(key.kernel_stack_id), profile_data->kernel_stack);
+	bpf_map_lookup_elem(stack_map, &(key.user_stack_id), profile_data->user_stack);
+
+	bpf_map_delete_elem(stack_map, &(key.user_stack_id));
+	bpf_map_delete_elem(stack_map, &(key.kernel_stack_id));
+	bpf_map_delete_elem(count_map, &key);
+	return SCAP_SUCCESS;
+}
+
+int32_t scap_bpf_get_profile_keys(scap_t *handle, struct sample_key_set *set)
+{
+	int count_map = handle->m_bpf_map_fds[PROFILE_CPU_COUNTS];
+	size_t capacity = 1000;
+	struct sample_key key, next_key;
+	__u32 count = 0;
+
+	if(set->keys != NULL)
+		free(set->keys);
+	set->nr_keys = 0;
+	set->keys = malloc(sizeof(struct sample_key) * capacity);
+	if(!set->keys)
+		return SCAP_FAILURE;
+
+	if(bpf_map_get_next_key(count_map, NULL, &next_key) == 0)
+	{
+		do
+		{
+			key = next_key;
+			if(count >= capacity)
+			{
+				capacity *= 2;
+				void *tmp = realloc(set->keys, sizeof(struct sample_key) * capacity);
+				if(!tmp)
+				{
+					free(set->keys);
+					set->keys = NULL;
+					set->nr_keys = 0;
+					return SCAP_FAILURE;
+				}
+				set->keys = tmp;
+			}
+			memcpy(&set->keys[count++], &key, sizeof(struct sample_key));
+		} while(bpf_map_get_next_key(count_map, &key, &next_key) == 0);
+	}
+	set->nr_keys = count;
+	return SCAP_SUCCESS;
+}
+
+int32_t scap_bpf_clear_profile_map(scap_t *handle)
+{
+	int count_map = handle->m_bpf_map_fds[PROFILE_CPU_COUNTS];
+	int stack_map = handle->m_bpf_map_fds[PROFILE_CPU_STACKS];
+	struct sample_key key, next_key;
+
+	if(bpf_map_get_next_key(count_map, NULL, &key) != 0)
+		return SCAP_SUCCESS;
+
+	while(bpf_map_get_next_key(count_map, &key, &next_key) == 0)
+	{
+		bpf_map_delete_elem(count_map, &key);
+		bpf_map_delete_elem(stack_map, &(key.kernel_stack_id));
+		bpf_map_delete_elem(stack_map, &(key.user_stack_id));
+		key = next_key;
+	}
+	bpf_map_delete_elem(count_map, &key);
+	bpf_map_delete_elem(stack_map, &(key.kernel_stack_id));
+	bpf_map_delete_elem(stack_map, &(key.user_stack_id));
+	return SCAP_SUCCESS;
+}
+
+int32_t scap_bpf_clear_stacks_map(scap_t *handle)
+{
+	int stack_map = handle->m_bpf_map_fds[PROFILE_CPU_STACKS];
+	uint32_t key, next_key;
+
+	if(bpf_map_get_next_key(stack_map, NULL, &key) != 0)
+		return SCAP_SUCCESS;
+
+	while(bpf_map_get_next_key(stack_map, &key, &next_key) == 0)
+	{
+		bpf_map_delete_elem(stack_map, &key);
+		key = next_key;
+	}
+	bpf_map_delete_elem(stack_map, &key);
+	return SCAP_SUCCESS;
+}
+
+int32_t scap_bpf_set_profile_pid_config(scap_t *handle, uint32_t pid, struct pid_config *config)
+{
+	int err = bpf_map_update_elem(handle->m_bpf_map_fds[PROFILE_CPU_PID_CONFIG], &pid, config, BPF_ANY);
+	if(err < 0)
+	{
+		snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "failure add profile config pid: %s", scap_strerror(handle, errno));
+		return SCAP_FAILURE;
+	}
+	return SCAP_SUCCESS;
+}
+
+int32_t scap_bpf_unset_profile_pid_config(scap_t *handle, uint32_t pid)
+{
+	if(bpf_map_delete_elem(handle->m_bpf_map_fds[PROFILE_CPU_PID_CONFIG], &pid) < 0)
+	{
+		snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "failure delete profile config pid: %s", scap_strerror(handle, errno));
+		return SCAP_FAILURE;
+	}
+	return SCAP_SUCCESS;
+}
+
+int32_t scap_bpf_clear_profile_pid_config(scap_t *handle)
+{
+	int pid_config_map = handle->m_bpf_map_fds[PROFILE_CPU_PID_CONFIG];
+	uint32_t key, next_key;
+
+	if(bpf_map_get_next_key(pid_config_map, NULL, &key) != 0)
+		return SCAP_SUCCESS;
+
+	while(bpf_map_get_next_key(pid_config_map, &key, &next_key) == 0)
+	{
+		bpf_map_delete_elem(pid_config_map, &key);
+		key = next_key;
+	}
+	bpf_map_delete_elem(pid_config_map, &key);
 	return SCAP_SUCCESS;
 }

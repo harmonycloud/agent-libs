@@ -474,6 +474,15 @@ public:
 
 	bool has_metrics();
 
+	int32_t get_profile_keys(OUT struct sample_key_set *set);
+	int32_t get_profile_data(struct sample_key key, OUT struct bpf_profile_data *sample);
+	int32_t clear_profile_map();
+	int32_t clear_stacks_map();
+	int32_t set_cpu_sampling(uint32_t start);
+	int32_t set_profile_pid_config(uint32_t pid, struct pid_config *config);
+	int32_t unset_profile_pid_config(uint32_t pid);
+	int32_t clear_profile_pid_config();
+
 	/*!
 	  \brief Return information about the machine generating the events.
 

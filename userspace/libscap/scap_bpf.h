@@ -49,6 +49,16 @@ int32_t scap_bpf_get_n_tracepoint_hit(scap_t* handle, long* ret);
 int32_t scap_bpf_enable_skb_capture(scap_t *handle, const char *ifname);
 int32_t scap_bpf_disable_skb_capture(scap_t *handle);
 int32_t scap_bpf_handle_eventmask(scap_t* handle, uint32_t op, uint32_t event_id);
+
+/* CPU flamegraph / continuous profiling */
+int32_t scap_bpf_set_cpu_sampling(scap_t *handle, uint32_t start);
+int32_t scap_bpf_get_profile_data(scap_t *handle, struct sample_key key, struct bpf_profile_data *profile_data);
+int32_t scap_bpf_get_profile_keys(scap_t *handle, struct sample_key_set *set);
+int32_t scap_bpf_clear_profile_map(scap_t *handle);
+int32_t scap_bpf_clear_stacks_map(scap_t *handle);
+int32_t scap_bpf_set_profile_pid_config(scap_t *handle, uint32_t pid, struct pid_config *config);
+int32_t scap_bpf_unset_profile_pid_config(scap_t *handle, uint32_t pid);
+int32_t scap_bpf_clear_profile_pid_config(scap_t *handle);
 int32_t scap_set_ktmask_bpf(scap_t* handle, uint32_t kt, bool enabled);
 
 static inline scap_evt *scap_bpf_evt_from_perf_sample(void *evt)
