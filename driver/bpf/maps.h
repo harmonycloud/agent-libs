@@ -90,6 +90,36 @@ struct bpf_map_def __bpf_section("maps") local_state_map = {
 	.max_entries = 0,
 };
 
+/* CPU stack sampling maps (indices must match PROFILE_CPU_* in types.h). */
+struct bpf_map_def __bpf_section("maps") cpu_counts = {
+	.type = BPF_MAP_TYPE_HASH,
+	.key_size = sizeof(struct sample_key),
+	.value_size = sizeof(u64),
+	.max_entries = 1024,
+};
+
+struct bpf_map_def __bpf_section("maps") cpu_stacks = {
+	.type = BPF_MAP_TYPE_STACK_TRACE,
+	.key_size = sizeof(u32),
+	.value_size = PERF_MAX_STACK_DEPTH * sizeof(u64),
+	.max_entries = PROFILE_MAPS_SIZE,
+};
+
+struct bpf_map_def __bpf_section("maps") cpu_sampling_ctrl = {
+	.type = BPF_MAP_TYPE_ARRAY,
+	.key_size = sizeof(u32),
+	.value_size = sizeof(u32),
+	.max_entries = 1,
+};
+
+/* Optional PID whitelist; CAPTURE_ALL path does not require entries. */
+struct bpf_map_def __bpf_section("maps") pids = {
+	.type = BPF_MAP_TYPE_HASH,
+	.key_size = sizeof(u32),
+	.value_size = sizeof(struct pid_config),
+	.max_entries = 1024,
+};
+
 #ifndef BPF_SUPPORTS_RAW_TRACEPOINTS
 struct bpf_map_def __bpf_section("maps") stash_map = {
 	.type = BPF_MAP_TYPE_HASH,

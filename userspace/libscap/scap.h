@@ -60,6 +60,7 @@ struct iovec;
 #include "uthash.h"
 #include "../common/types.h"
 #include "../../driver/ppm_events_public.h"
+#include "../../driver/bpf/types.h"
 #ifdef _WIN32
 #include <time.h>
 #define MAP_FAILED (void*)-1
@@ -1132,6 +1133,15 @@ uint64_t get_pid_vtid_map(scap_t *handle, uint64_t pid, uint64_t vtid);
 bool put_tid_vtid_map(scap_t *handle, uint64_t tid, uint64_t vtid);
 uint64_t get_tid_vtid_map(scap_t *handle,uint64_t tid);
 void delete_tid_vtid_map(scap_t *handle, uint64_t tid);
+
+int32_t scap_get_profile_keys(scap_t *handle, struct sample_key_set *set);
+int32_t scap_get_profile_data(scap_t *handle, struct sample_key key, struct bpf_profile_data *profile_data);
+int32_t scap_clear_profile_map(scap_t *handle);
+int32_t scap_clear_stacks_map(scap_t *handle);
+int32_t scap_set_cpu_sampling(scap_t *handle, uint32_t start);
+int32_t scap_set_profile_pid_config(scap_t *handle, uint32_t pid, struct pid_config *config);
+int32_t scap_unset_profile_pid_config(scap_t *handle, uint32_t pid);
+int32_t scap_clear_profile_pid_config(scap_t *handle);
 #ifdef __cplusplus
 }
 #endif
