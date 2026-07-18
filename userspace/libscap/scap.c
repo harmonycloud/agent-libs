@@ -2801,3 +2801,42 @@ uint64_t get_tid_vtid_map(scap_t *handle,uint64_t tid){
 		return 0;
 	}
 }
+int32_t scap_get_profile_keys(scap_t *handle, struct sample_key_set *set)
+{
+	return scap_bpf_get_profile_keys(handle, set);
+}
+
+int32_t scap_get_profile_data(scap_t *handle, struct sample_key key, struct bpf_profile_data *profile_data)
+{
+	return scap_bpf_get_profile_data(handle, key, profile_data);
+}
+
+int32_t scap_clear_profile_map(scap_t *handle)
+{
+	return scap_bpf_clear_profile_map(handle);
+}
+
+int32_t scap_clear_stacks_map(scap_t *handle)
+{
+	return scap_bpf_clear_stacks_map(handle);
+}
+
+int32_t scap_set_cpu_sampling(scap_t *handle, uint32_t start)
+{
+	return scap_bpf_set_cpu_sampling(handle, start);
+}
+
+int32_t scap_set_profile_pid_config(scap_t *handle, uint32_t pid, struct pid_config *config)
+{
+	return scap_bpf_set_profile_pid_config(handle, pid, config);
+}
+
+int32_t scap_unset_profile_pid_config(scap_t *handle, uint32_t pid)
+{
+	return scap_bpf_unset_profile_pid_config(handle, pid);
+}
+
+int32_t scap_clear_profile_pid_config(scap_t *handle)
+{
+	return scap_bpf_clear_profile_pid_config(handle);
+}

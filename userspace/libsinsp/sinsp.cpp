@@ -1744,6 +1744,52 @@ const scap_machine_info* sinsp::get_machine_info()
 	return m_machine_info;
 }
 
+int32_t sinsp::get_profile_keys(struct sample_key_set *set)
+{
+	int res = scap_get_profile_keys(m_h, set);
+	if(res != SCAP_SUCCESS)
+		return -1;
+	return 0;
+}
+
+int32_t sinsp::get_profile_data(struct sample_key key, OUT struct bpf_profile_data *sample)
+{
+	int32_t res = scap_get_profile_data(m_h, key, sample);
+	if(res != SCAP_SUCCESS)
+		return -1;
+	return res;
+}
+
+int32_t sinsp::clear_profile_map()
+{
+	return scap_clear_profile_map(m_h);
+}
+
+int32_t sinsp::clear_stacks_map()
+{
+	return scap_clear_stacks_map(m_h);
+}
+
+int32_t sinsp::set_cpu_sampling(uint32_t start)
+{
+	return scap_set_cpu_sampling(m_h, start);
+}
+
+int32_t sinsp::set_profile_pid_config(uint32_t pid, struct pid_config *config)
+{
+	return scap_set_profile_pid_config(m_h, pid, config);
+}
+
+int32_t sinsp::unset_profile_pid_config(uint32_t pid)
+{
+	return scap_unset_profile_pid_config(m_h, pid);
+}
+
+int32_t sinsp::clear_profile_pid_config()
+{
+	return scap_clear_profile_pid_config(m_h);
+}
+
 const unordered_map<uint32_t, scap_userinfo*>* sinsp::get_userlist()
 {
 	return &m_userlist;

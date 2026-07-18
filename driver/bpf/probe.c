@@ -47,6 +47,10 @@ int bpf_kp_##event(struct pt_regs *ctx)
 __bpf_section(KRET_NAME #event)				\
 int bpf_kret_##event(struct pt_regs *ctx)
 
+#define BPF_PERF_PROBE(event)				\
+__bpf_section(#event)					\
+int bpf_##event(struct pt_regs *ctx)
+
 BPF_PROBE("raw_syscalls/", sys_enter, sys_enter_args)
 {
 	const struct syscall_evt_pair *sc_evt;
@@ -754,6 +758,61 @@ BPF_KPROBE(sock_sendmsg) {
 	return 0;
 }
 #endif
+
+/* CPU continuous profiling: sample stacks on software CPU clock. */
+BPF_PERF_PROBE(perf_event)
+{
+	u32 zero_u32 = 0;
+	u32 *start_profile;
+	u64 id;
+	u32 tgid;
+	struct task_struct *task;
+	int flags;
+	struct pid_config *config;
+	enum profiling_type type;
+	struct sample_key key = {};
+	u64 zero_u64 = 0;
+	u64 *count;
+
+	start_profile = bpf_map_lookup_elem(&cpu_sampling_ctrl, &zero_u32);
+	if (!start_profile || *start_profile == PROFILING_DISABLED)
+		return 0;
+
+	id = bpf_get_current_pid_tgid();
+	tgid = id >> 32;
+	task = (struct task_struct *)bpf_get_current_task();
+	if (tgid == 0 || task == 0)
+		return 0;
+
+	flags = _READ(task->flags);
+	if (flags & PF_KTHREAD)
+		return 0;
+
+	config = bpf_map_lookup_elem(&pids, &tgid);
+	if (config == NULL && *start_profile != PROFILING_CAPTURE_ALL)
+		return 0;
+
+	type = PROFILING_TYPE_FRAMEPOINTERS;
+	key.pid = tgid;
+	bpf_get_current_comm(&key.comm, sizeof(key.comm));
+	if (type == PROFILING_TYPE_FRAMEPOINTERS) {
+		int stack_id = bpf_get_stackid(ctx, &cpu_stacks, BPF_F_FAST_STACK_CMP | BPF_F_USER_STACK);
+		if (stack_id >= 0)
+			key.user_stack_id = stack_id;
+
+		int kernel_stack_id = bpf_get_stackid(ctx, &cpu_stacks, BPF_F_FAST_STACK_CMP);
+		if (kernel_stack_id >= 0)
+			key.kernel_stack_id = kernel_stack_id;
+	}
+
+	count = bpf_map_lookup_or_try_init(&cpu_counts, &key, &zero_u64);
+	if (!count)
+		return 0;
+
+	__sync_fetch_and_add(count, 1);
+	return 0;
+}
+
 char kernel_ver[] __bpf_section("kernel_version") = UTS_RELEASE;
 
 char __license[] __bpf_section("license") = "GPL";
