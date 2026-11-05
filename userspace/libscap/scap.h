@@ -1134,10 +1134,15 @@ bool put_tid_vtid_map(scap_t *handle, uint64_t tid, uint64_t vtid);
 uint64_t get_tid_vtid_map(scap_t *handle,uint64_t tid);
 void delete_tid_vtid_map(scap_t *handle, uint64_t tid);
 
-int32_t scap_get_profile_keys(scap_t *handle, struct sample_key_set *set);
-int32_t scap_get_profile_data(scap_t *handle, struct sample_key key, struct bpf_profile_data *profile_data);
-int32_t scap_clear_profile_map(scap_t *handle);
-int32_t scap_clear_stacks_map(scap_t *handle);
+/* Named BPF map access for paired profiling consumers. */
+int scap_map_fd_by_name(scap_t *handle, const char *name);
+int scap_map_update_elem(int fd, const void *key, const void *value, uint64_t flags);
+int scap_map_delete_elem(int fd, const void *key);
+int scap_map_create(int map_type, int key_size, int value_size, int max_entries,
+                    uint32_t map_flags, int inner_map_fd);
+/* Open an independent perf reader. The map fd is borrowed; close with scap_close. */
+scap_t* mini_scap_open_live(int buf_size_pages, int perf_map_fd);
+
 int32_t scap_set_cpu_sampling(scap_t *handle, uint32_t start);
 int32_t scap_set_profile_pid_config(scap_t *handle, uint32_t pid, struct pid_config *config);
 int32_t scap_unset_profile_pid_config(scap_t *handle, uint32_t pid);

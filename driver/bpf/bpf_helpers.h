@@ -9,22 +9,37 @@ or GPL2.txt for full copies of the license.
 #ifndef __BPF_HELPERS_H
 #define __BPF_HELPERS_H
 
-static void *(*bpf_map_lookup_elem)(void *map, void *key) =
+static void *(* const bpf_map_lookup_elem)(void *map, const void *key) =
 	(void *)BPF_FUNC_map_lookup_elem;
-static int (*bpf_map_update_elem)(void *map, void *key, void *value,
-				  unsigned long long flags) =
+static long (* const bpf_map_update_elem)(void *map, const void *key,
+					const void *value,
+					unsigned long long flags) =
 	(void *)BPF_FUNC_map_update_elem;
-static int (*bpf_map_delete_elem)(void *map, void *key) =
+static long (* const bpf_map_delete_elem)(void *map, const void *key) =
 	(void *)BPF_FUNC_map_delete_elem;
 static int (*bpf_probe_read)(void *dst, int size, void *unsafe_ptr) =
 	(void *)BPF_FUNC_probe_read;
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5,5,0)) || \
+	((PPM_RHEL_RELEASE_CODE > 0) && (PPM_RHEL_RELEASE_CODE >= PPM_RHEL_RELEASE_VERSION(8, 5))) || \
+	defined(USE_BPF_PROBE_KERNEL_USER_VARIANTS)
+static int (*bpf_probe_read_user)(void *dst, uint32_t size, const void *unsafe_ptr) =
+	(void *)BPF_FUNC_probe_read_user;
+static int (*bpf_probe_read_kernel)(void *dst, uint32_t size, const void *unsafe_ptr) =
+	(void *)BPF_FUNC_probe_read_kernel;
+#else
+static int (*bpf_probe_read_user)(void *dst, uint32_t size, const void *unsafe_ptr) =
+	(void *)BPF_FUNC_probe_read;
+static int (*bpf_probe_read_kernel)(void *dst, uint32_t size, const void *unsafe_ptr) =
+	(void *)BPF_FUNC_probe_read;
+#endif
+
 static unsigned long long (*bpf_ktime_get_ns)(void) =
 	(void *)BPF_FUNC_ktime_get_ns;
 static int (*bpf_trace_printk)(const char *fmt, int fmt_size, ...) =
 	(void *)BPF_FUNC_trace_printk;
 static void (*bpf_tail_call)(void *ctx, void *map, int index) =
 	(void *)BPF_FUNC_tail_call;
-static unsigned long long (*bpf_get_smp_processor_id)(void) =
+static u32 (* const bpf_get_smp_processor_id)(void) =
 	(void *)BPF_FUNC_get_smp_processor_id;
 static unsigned long long (*bpf_get_current_pid_tgid)(void) =
 	(void *)BPF_FUNC_get_current_pid_tgid;
@@ -38,10 +53,12 @@ static int (*bpf_clone_redirect)(void *ctx, int ifindex, int flags) =
 	(void *)BPF_FUNC_clone_redirect;
 static int (*bpf_redirect)(int ifindex, int flags) =
 	(void *)BPF_FUNC_redirect;
-static int (*bpf_perf_event_output)(void *ctx, void *map,
-				    unsigned long long flags, void *data,
-				    int size) =
+static long (* const bpf_perf_event_output)(void *ctx, void *map,
+				     unsigned long long flags, void *data,
+				     unsigned long long size) =
 	(void *)BPF_FUNC_perf_event_output;
+static long (*bpf_get_stack)(void *ctx, void *buf, uint32_t size, unsigned long long flags) =
+	(void *)BPF_FUNC_get_stack;
 static int (*bpf_get_stackid)(void *ctx, void *map, int flags) =
 	(void *)BPF_FUNC_get_stackid;
 static int (*bpf_probe_write_user)(void *dst, void *src, int size) =

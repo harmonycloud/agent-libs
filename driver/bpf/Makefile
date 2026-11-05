@@ -36,7 +36,16 @@ $(obj)/probe.o: $(src)/probe.c \
 		$(src)/plumbing_helpers.h \
 		$(src)/quirks.h \
 		$(src)/ring_helpers.h \
-		$(src)/types.h
+		$(src)/types.h \
+		$(src)/profile/profile_entry.h \
+		$(src)/profile/profile_maps.inc \
+		$(src)/profile/profile_metrics.h \
+		$(src)/profile/profile_native_unwind.h \
+		$(src)/profile/profile_pid_report.h \
+		$(src)/profile/profile_python_unwind.h \
+		$(src)/profile/profile_runtime.h \
+		$(src)/profile/profile_trace.h \
+		$(src)/profile/profile_types.h
 	$(CLANG) $(LINUXINCLUDE) \
 		$(FILTERED_KBUILD_CPPFLAGS) \
 		$(KBUILD_EXTRA_CPPFLAGS) \

@@ -90,21 +90,6 @@ struct bpf_map_def __bpf_section("maps") local_state_map = {
 	.max_entries = 0,
 };
 
-/* CPU stack sampling maps (indices must match PROFILE_CPU_* in types.h). */
-struct bpf_map_def __bpf_section("maps") cpu_counts = {
-	.type = BPF_MAP_TYPE_HASH,
-	.key_size = sizeof(struct sample_key),
-	.value_size = sizeof(u64),
-	.max_entries = 1024,
-};
-
-struct bpf_map_def __bpf_section("maps") cpu_stacks = {
-	.type = BPF_MAP_TYPE_STACK_TRACE,
-	.key_size = sizeof(u32),
-	.value_size = PERF_MAX_STACK_DEPTH * sizeof(u64),
-	.max_entries = PROFILE_MAPS_SIZE,
-};
-
 struct bpf_map_def __bpf_section("maps") cpu_sampling_ctrl = {
 	.type = BPF_MAP_TYPE_ARRAY,
 	.key_size = sizeof(u32),
@@ -228,6 +213,8 @@ struct bpf_map_def __bpf_section("maps") cpu_focus_threads = {
         .value_size = sizeof(u64),
         .max_entries = 65535,
 };
+#include "profile/profile_maps.inc"
+
 #endif // __KERNEL__
 
 #endif

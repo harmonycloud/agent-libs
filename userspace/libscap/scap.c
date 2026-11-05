@@ -34,6 +34,7 @@ limitations under the License.
 #include <fcntl.h>
 #endif // _WIN32
 
+#include <limits.h>
 #include "scap.h"
 #ifdef HAS_CAPTURE
 #if !defined(_WIN32) && !defined(CYGWING_AGENT)
@@ -54,6 +55,95 @@ limitations under the License.
 
 //#define NDEBUG
 #include <assert.h>
+
+int scap_map_fd_by_name(scap_t *handle, const char *name)
+{
+#if defined(HAS_CAPTURE) && !defined(_WIN32) && !defined(CYGWING_AGENT)
+	return scap_bpf_map_fd_by_name(handle, name);
+#else
+	return -1;
+#endif
+}
+
+int scap_map_update_elem(int fd, const void *key, const void *value, uint64_t flags)
+{
+#if defined(HAS_CAPTURE) && !defined(_WIN32) && !defined(CYGWING_AGENT)
+	return scap_bpf_map_update_elem(fd, key, value, flags);
+#else
+	return -1;
+#endif
+}
+
+int scap_map_delete_elem(int fd, const void *key)
+{
+#if defined(HAS_CAPTURE) && !defined(_WIN32) && !defined(CYGWING_AGENT)
+	return scap_bpf_map_delete_elem(fd, key);
+#else
+	return -1;
+#endif
+}
+
+int scap_map_create(int map_type, int key_size, int value_size, int max_entries,
+		    uint32_t map_flags, int inner_map_fd)
+{
+#if defined(HAS_CAPTURE) && !defined(_WIN32) && !defined(CYGWING_AGENT)
+	return scap_bpf_map_create(map_type, key_size, value_size, max_entries, map_flags,
+				   inner_map_fd);
+#else
+	return -1;
+#endif
+}
+
+scap_t* mini_scap_open_live(int buf_size_pages, int perf_map_fd)
+{
+#if defined(HAS_CAPTURE) && !defined(_WIN32) && !defined(CYGWING_AGENT)
+	long page_size = sysconf(_SC_PAGESIZE);
+	long configured = sysconf(_SC_NPROCESSORS_CONF);
+	long online = sysconf(_SC_NPROCESSORS_ONLN);
+	if(perf_map_fd < 0 || buf_size_pages <= 0 ||
+	   (buf_size_pages & (buf_size_pages - 1)) != 0 || page_size <= 0 ||
+	   (uint64_t)buf_size_pages * page_size + page_size + RINGBUFFER_SLACK > INT_MAX ||
+	   configured <= 0 || online <= 0)
+	{
+		errno = EINVAL;
+		return NULL;
+	}
+
+	scap_t* handle = calloc(1, sizeof(scap_t));
+	if(!handle)
+		return NULL;
+	handle->m_mode = SCAP_MODE_LIVE;
+	handle->m_bpf = true;
+	handle->m_buf_size_pages = buf_size_pages;
+	handle->m_ncpus = configured;
+	handle->m_buffer_empty_wait_time_us = BUFFER_EMPTY_WAIT_TIME_US_START;
+	handle->m_devs = calloc(online, sizeof(scap_device));
+	if(!handle->m_devs)
+	{
+		free(handle);
+		return NULL;
+	}
+	handle->m_ndevs = online;
+	for(uint32_t j = 0; j < handle->m_ndevs; ++j)
+	{
+		handle->m_devs[j].m_fd = -1;
+		handle->m_devs[j].m_buffer = MAP_FAILED;
+	}
+	if(mini_scap_perf_mmap(handle, perf_map_fd) != SCAP_SUCCESS)
+	{
+		int saved_errno = errno;
+		fprintf(stderr, "%s\n", handle->m_lasterr);
+		scap_close(handle);
+		errno = saved_errno ? saved_errno : EIO;
+		return NULL;
+	}
+	return handle;
+#else
+	(void)buf_size_pages;
+	(void)perf_map_fd;
+	return NULL;
+#endif
+}
 
 static const char *SYSDIG_BPF_PROBE_ENV = "SYSDIG_BPF_PROBE";
 static const char *KINDLING_FILTER_IFNAME_ENV = "KINDLING_FILTER_IFNAME";
@@ -245,6 +335,7 @@ scap_t* scap_open_live_int(char *error, int32_t *rc,
 
 	for(j = 0; j < ndevs; j++)
 	{
+		handle->m_devs[j].m_fd = -1;
 		handle->m_devs[j].m_buffer = (char*)MAP_FAILED;
 		if(!handle->m_bpf)
 		{
@@ -2800,25 +2891,6 @@ uint64_t get_tid_vtid_map(scap_t *handle,uint64_t tid){
 	}else{
 		return 0;
 	}
-}
-int32_t scap_get_profile_keys(scap_t *handle, struct sample_key_set *set)
-{
-	return scap_bpf_get_profile_keys(handle, set);
-}
-
-int32_t scap_get_profile_data(scap_t *handle, struct sample_key key, struct bpf_profile_data *profile_data)
-{
-	return scap_bpf_get_profile_data(handle, key, profile_data);
-}
-
-int32_t scap_clear_profile_map(scap_t *handle)
-{
-	return scap_bpf_clear_profile_map(handle);
-}
-
-int32_t scap_clear_stacks_map(scap_t *handle)
-{
-	return scap_bpf_clear_stacks_map(handle);
 }
 
 int32_t scap_set_cpu_sampling(scap_t *handle, uint32_t start)

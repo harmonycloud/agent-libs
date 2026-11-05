@@ -64,7 +64,7 @@ static __always_inline int __bpf_##x(struct filler_data *data);		\
 __bpf_section(TP_NAME "filler/" #x)					\
 static __always_inline int bpf_##x(void *ctx)				\
 {									\
-	struct filler_data data;					\
+	struct filler_data data = {0};					\
 	int res;							\
 									\
 	res = init_filler_data(ctx, &data, is_syscall);			\
@@ -97,7 +97,7 @@ static __always_inline int __bpf_##x(struct filler_data *data);		\
 									\
 static __always_inline int bpf_##x(void *ctx)				\
 {									\
-	struct filler_data data;					\
+	struct filler_data data = {0};					\
 	int res;							\
 									\
 	res = init_filler_data(ctx, &data, false);			\
@@ -5188,7 +5188,7 @@ static __always_inline int __bpf_cpu_analysis(struct filler_data *data, u32 tid)
 
 static __always_inline int bpf_cpu_analysis(void *ctx, u32 tid)
 {
-    struct filler_data data;
+    struct filler_data data = {0};
     int res;
 
     res = init_filler_data(ctx, &data, false);

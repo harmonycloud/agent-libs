@@ -32,6 +32,8 @@ typedef class sinsp sinsp;
 typedef class sinsp_threadinfo sinsp_threadinfo;
 
 
+namespace MiniSinsp { class mini_sinsp; }
+
 namespace test_helpers {
 	class event_builder;
 	class sinsp_mock;
@@ -151,6 +153,9 @@ public:
 		ppm_event_category m_category;	///< Event category from the driver
 		subcategory m_subcategory;		///< Domain for IO and wait events
 	};
+
+	/* The raw event remains owned by the capture reader. */
+	inline scap_evt* get_scap_evt() const { return m_pevt; }
 
 	sinsp_evt();
 	sinsp_evt(sinsp* inspector);
@@ -510,6 +515,7 @@ VISIBILITY_PRIVATE
 	std::shared_ptr<sinsp_fdinfo_t> m_fdinfo_ref;
 
 	friend class sinsp;
+	friend class MiniSinsp::mini_sinsp;
 	friend class sinsp_parser;
 	friend class sinsp_threadinfo;
 	friend class sinsp_analyzer;
