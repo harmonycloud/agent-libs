@@ -59,13 +59,13 @@ static __always_inline int push_evt_frame(void *ctx,
 	fixup_evt_len(data->buf, data->state->tail_ctx.len);
 
 #ifdef BPF_FORBIDS_ZERO_ACCESS
-	int res = bpf_perf_event_output(ctx,
+	long res = bpf_perf_event_output(ctx,
 					&perf_map,
 					BPF_F_CURRENT_CPU,
 					data->buf,
 					((data->state->tail_ctx.len - 1) & SCRATCH_SIZE_MAX) + 1);
 #else
-	int res = bpf_perf_event_output(ctx,
+	long res = bpf_perf_event_output(ctx,
 					&perf_map,
 					BPF_F_CURRENT_CPU,
 					data->buf,
@@ -89,7 +89,7 @@ static __always_inline int push_evt_frame(void *ctx,
 		state->hotplug_cpu = bpf_get_smp_processor_id();
 		bpf_printk("detected hotplug event, cpu=%d\n", state->hotplug_cpu);
 	} else if (res) {
-		bpf_printk("bpf_perf_event_output failed, res=%d\n", res);
+		bpf_printk("bpf_perf_event_output failed, res=%ld\n", res);
 		return PPM_FAILURE_BUG;
 	}
 

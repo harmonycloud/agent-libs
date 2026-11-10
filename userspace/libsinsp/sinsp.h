@@ -474,10 +474,12 @@ public:
 
 	bool has_metrics();
 
-	int32_t get_profile_keys(OUT struct sample_key_set *set);
-	int32_t get_profile_data(struct sample_key key, OUT struct bpf_profile_data *sample);
-	int32_t clear_profile_map();
-	int32_t clear_stacks_map();
+	/* Map fds are borrowed; map_create returns an fd owned by the caller. */
+	int get_map_fd_by_name(const char* name);
+	int map_update_elem(int fd, const void* key, const void* value, uint64_t flags);
+	int map_delete_elem(int fd, const void* key);
+	int map_create(int map_type, int key_size, int value_size, int max_entries,
+	               uint32_t map_flags, int inner_map_fd);
 	int32_t set_cpu_sampling(uint32_t start);
 	int32_t set_profile_pid_config(uint32_t pid, struct pid_config *config);
 	int32_t unset_profile_pid_config(uint32_t pid);

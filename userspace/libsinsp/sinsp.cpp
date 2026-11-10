@@ -261,6 +261,28 @@ void sinsp::enable_page_faults()
 #endif
 }
 
+int sinsp::get_map_fd_by_name(const char* name)
+{
+	return scap_map_fd_by_name(m_h, name);
+}
+
+int sinsp::map_update_elem(int fd, const void* key, const void* value, uint64_t flags)
+{
+	return scap_map_update_elem(fd, key, value, flags);
+}
+
+int sinsp::map_delete_elem(int fd, const void* key)
+{
+	return scap_map_delete_elem(fd, key);
+}
+
+int sinsp::map_create(int map_type, int key_size, int value_size, int max_entries,
+		      uint32_t map_flags, int inner_map_fd)
+{
+	return scap_map_create(map_type, key_size, value_size, max_entries, map_flags,
+			       inner_map_fd);
+}
+
 void sinsp::init()
 {
 	//
@@ -1742,32 +1764,6 @@ bool sinsp::run_filters_on_evt(sinsp_evt *evt)
 const scap_machine_info* sinsp::get_machine_info()
 {
 	return m_machine_info;
-}
-
-int32_t sinsp::get_profile_keys(struct sample_key_set *set)
-{
-	int res = scap_get_profile_keys(m_h, set);
-	if(res != SCAP_SUCCESS)
-		return -1;
-	return 0;
-}
-
-int32_t sinsp::get_profile_data(struct sample_key key, OUT struct bpf_profile_data *sample)
-{
-	int32_t res = scap_get_profile_data(m_h, key, sample);
-	if(res != SCAP_SUCCESS)
-		return -1;
-	return res;
-}
-
-int32_t sinsp::clear_profile_map()
-{
-	return scap_clear_profile_map(m_h);
-}
-
-int32_t sinsp::clear_stacks_map()
-{
-	return scap_clear_stacks_map(m_h);
 }
 
 int32_t sinsp::set_cpu_sampling(uint32_t start)

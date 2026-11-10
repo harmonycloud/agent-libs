@@ -17,6 +17,8 @@ limitations under the License.
 #ifndef _SCAP_BPF_H
 #define _SCAP_BPF_H
 
+#include <stddef.h>
+#include <string.h>
 #include "compat/perf_event.h"
 
 struct perf_event_sample {
@@ -30,6 +32,17 @@ struct perf_lost_sample {
 	uint64_t id;
 	uint64_t lost;
 };
+
+/* Map fds are borrowed from the inspector. Created map fds belong to the caller. */
+int scap_bpf_map_fd_by_name(scap_t *handle, const char *name);
+int scap_bpf_map_update_elem(int fd, const void *key, const void *value, uint64_t flags);
+int scap_bpf_map_delete_elem(int fd, const void *key);
+int scap_bpf_map_create(int map_type, int key_size, int value_size, int max_entries,
+                       uint32_t map_flags, int inner_map_fd);
+int32_t mini_scap_perf_mmap(scap_t *handle, int perf_map_fd);
+
+/* Extra address space for a complete wrapping perf record (u16 size). */
+#define RINGBUFFER_SLACK (1 << 16)
 
 int32_t scap_bpf_load(scap_t *handle, const char *bpf_probe);
 int32_t scap_bpf_start_capture(scap_t *handle);
@@ -52,14 +65,37 @@ int32_t scap_bpf_handle_eventmask(scap_t* handle, uint32_t op, uint32_t event_id
 
 /* CPU flamegraph / continuous profiling */
 int32_t scap_bpf_set_cpu_sampling(scap_t *handle, uint32_t start);
-int32_t scap_bpf_get_profile_data(scap_t *handle, struct sample_key key, struct bpf_profile_data *profile_data);
-int32_t scap_bpf_get_profile_keys(scap_t *handle, struct sample_key_set *set);
-int32_t scap_bpf_clear_profile_map(scap_t *handle);
-int32_t scap_bpf_clear_stacks_map(scap_t *handle);
 int32_t scap_bpf_set_profile_pid_config(scap_t *handle, uint32_t pid, struct pid_config *config);
 int32_t scap_bpf_unset_profile_pid_config(scap_t *handle, uint32_t pid);
 int32_t scap_bpf_clear_profile_pid_config(scap_t *handle);
 int32_t scap_set_ktmask_bpf(scap_t* handle, uint32_t kt, bool enabled);
+
+static inline void fixup_wrapping_event(struct scap_device *dev, void *evt)
+{
+	struct perf_event_mmap_page *header = (struct perf_event_mmap_page *)dev->m_buffer;
+	void *start = (char *)dev->m_buffer + header->data_offset;
+	void *end = (char *)start + header->data_size;
+
+	// The size of the event fragment that fits before the end of the buffer
+	ptrdiff_t off = (char *)end - (char *)evt;
+
+	// If the part that fits is too small to even contain the perf_event_sample header,
+	// copy the full header first. Technically, we could calculate the size by looking
+	// at the right part of the buffer (the beginning or the end), but ultimately
+	// we're copying less than 16 bytes here, so it's probably not worth the overhead.
+	if(off < (ptrdiff_t)sizeof(struct perf_event_sample))
+	{
+		memcpy(end, start, sizeof(struct perf_event_sample) - off);
+	}
+
+	// Now we know at least the full header is in place, we can read the size
+	// of the event and copy the rest if needed.
+	struct perf_event_sample *sample = evt;
+	if(off < (ptrdiff_t)sample->header.size)
+	{
+		memcpy(end, start, sample->header.size - off);
+	}
+}
 
 static inline scap_evt *scap_bpf_evt_from_perf_sample(void *evt)
 {
@@ -115,6 +151,8 @@ static inline int32_t scap_bpf_advance_to_evt(scap_t *handle, uint16_t cpuid, bo
 		struct perf_event_header *e = begin;
 
 		ASSERT(*len >= sizeof(*e));
+		/* Restore a wrapping header or payload before dereferencing it. */
+		fixup_wrapping_event(dev, e);
 		ASSERT(*len >= e->size);
 		if(e->type == PERF_RECORD_SAMPLE)
 		{

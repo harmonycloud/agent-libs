@@ -9,17 +9,6 @@ or GPL2.txt for full copies of the license.
 #ifndef __TYPES_H
 #define __TYPES_H
 
-/* CPU stack sampling types (shared by BPF + userspace). */
-struct sample_key {
-	__u32 pid;
-	__s32 kernel_stack_id;
-	__s32 user_stack_id;
-	char  comm[16];
-} __attribute__((aligned(8)));
-struct sample_key_set {
-	__u32 nr_keys;
-	struct sample_key *keys;
-} __attribute__((aligned(8)));
 enum profiling_type {
 	PROFILING_TYPE_UNKNOWN = 1,
 	PROFILING_TYPE_FRAMEPOINTERS,
@@ -36,15 +25,7 @@ enum profiling_state {
 	PROFILING_ENABLED,
 	PROFILING_CAPTURE_ALL
 };
-#define PERF_MAX_STACK_DEPTH      127
-#define PROFILE_MAPS_SIZE         16384
-
-struct bpf_profile_data {
-	__u32 pid;
-	__u64 user_stack[PERF_MAX_STACK_DEPTH];
-	__u64 kernel_stack[PERF_MAX_STACK_DEPTH];
-	__u64 count;
-} __attribute__((aligned(8)));
+#include "profile/profile_types.h"
 
 #ifdef __KERNEL__
 
@@ -298,14 +279,12 @@ enum sysdig_map_types {
 	SYSDIG_TMP_SCRATCH_MAP = 7,
 	SYSDIG_SETTINGS_MAP = 8,
 	SYSDIG_LOCAL_STATE_MAP = 9,
-	/* CPU flamegraph maps — placed right after local_state_map in maps.h */
-	PROFILE_CPU_COUNTS = 10,
-	PROFILE_CPU_STACKS = 11,
-	PROFILE_CPU_SAMPLING_CTRL = 12,
-	PROFILE_CPU_PID_CONFIG = 13,
+	/* Sampling controls follow local_state_map in maps.h. */
+	PROFILE_CPU_SAMPLING_CTRL = 10,
+	PROFILE_CPU_PID_CONFIG = 11,
 #ifndef BPF_SUPPORTS_RAW_TRACEPOINTS
-	SYSDIG_STASH_MAP = 14,
-	SYSDIG_RTT_STATISTICS = 15,
+	SYSDIG_STASH_MAP = 12,
+	SYSDIG_RTT_STATISTICS = 13,
 #endif
 };
 

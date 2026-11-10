@@ -71,7 +71,7 @@ typedef struct wh_t wh_t;
 // ebpf defs
 //
 #define BPF_PROGS_MAX 128
-#define BPF_MAPS_MAX 32
+#define BPF_MAPS_MAX 96
 struct bpf_prog {
 	int fd;
 	int efd;
@@ -171,6 +171,9 @@ struct scap
 		int m_bpf_prog_cnt;
 		bool m_bpf_fillers[BPF_PROGS_MAX];
 		int m_bpf_map_fds[BPF_MAPS_MAX];
+		char m_bpf_map_names[BPF_MAPS_MAX][64];
+		int m_bpf_nr_maps;
+		int m_buf_size_pages;
 		int m_bpf_prog_array_map_idx;
 	};
 	// Anonymous struct with tracepoints and kprobe of interest

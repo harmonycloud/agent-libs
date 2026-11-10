@@ -83,6 +83,7 @@ set(SINSP_SOURCES
 	threadinfo.cpp
 	tuples.cpp
 	sinsp.cpp
+	mini_sinsp.cpp
 	sinsp_tp.cpp
 	stats.cpp
 	table.cpp

@@ -61,6 +61,7 @@ struct bpf_map_data {
 	int fd;
 	size_t elf_offset;
 	struct bpf_map_def def;
+	char name[64];
 };
 
 static const int BUF_SIZE_PAGES = 2048;
@@ -102,7 +103,7 @@ static int32_t lookup_filler_id(const char *filler_name)
 	return -1;
 }
 
-static int bpf_map_update_elem(int fd, const void *key, const void *value, uint64_t flags)
+int scap_bpf_map_update_elem(int fd, const void *key, const void *value, uint64_t flags)
 {
 	union bpf_attr attr;
 
@@ -114,6 +115,11 @@ static int bpf_map_update_elem(int fd, const void *key, const void *value, uint6
 	attr.flags = flags;
 
 	return sys_bpf(BPF_MAP_UPDATE_ELEM, &attr, sizeof(attr));
+}
+
+static inline int bpf_map_update_elem(int fd, const void *key, const void *value, uint64_t flags)
+{
+	return scap_bpf_map_update_elem(fd, key, value, flags);
 }
 
 static int bpf_map_lookup_elem(int fd, const void *key, void *value)
@@ -142,7 +148,7 @@ static int bpf_map_get_next_key(int fd, void *key, void *next_key)
 	return sys_bpf(BPF_MAP_GET_NEXT_KEY, &attr, sizeof(attr));
 }
 
-static int bpf_map_delete_elem(int fd, const void *key)
+int scap_bpf_map_delete_elem(int fd, const void *key)
 {
 	union bpf_attr attr;
 
@@ -154,9 +160,14 @@ static int bpf_map_delete_elem(int fd, const void *key)
 	return sys_bpf(BPF_MAP_DELETE_ELEM, &attr, sizeof(attr));
 }
 
-static int bpf_map_create(enum bpf_map_type map_type,
-			  int key_size, int value_size, int max_entries,
-			  uint32_t map_flags)
+static inline int bpf_map_delete_elem(int fd, const void *key)
+{
+	return scap_bpf_map_delete_elem(fd, key);
+}
+
+int scap_bpf_map_create(int map_type,
+			int key_size, int value_size, int max_entries,
+			uint32_t map_flags, int inner_map_fd)
 {
 	union bpf_attr attr;
 
@@ -167,6 +178,10 @@ static int bpf_map_create(enum bpf_map_type map_type,
 	attr.value_size = value_size;
 	attr.max_entries = max_entries;
 	attr.map_flags = map_flags;
+	if(map_type == BPF_MAP_TYPE_HASH_OF_MAPS || map_type == BPF_MAP_TYPE_ARRAY_OF_MAPS)
+	{
+		attr.inner_map_fd = inner_map_fd;
+	}
 
 	return sys_bpf(BPF_MAP_CREATE, &attr, sizeof(attr));
 }
@@ -384,36 +399,53 @@ static int32_t load_elf_maps_section(scap_t *handle, struct bpf_map_data *maps,
 	}
 
 	*nr_maps = 0;
-	sym = calloc(BPF_MAPS_MAX + 1, sizeof(GElf_Sym));
+	sym = calloc(BPF_MAPS_MAX, sizeof(GElf_Sym));
+	if(!sym)
+	{
+		snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "cannot allocate map symbols");
+		return SCAP_FAILURE;
+	}
 	for(i = 0; i < symbols->d_size / sizeof(GElf_Sym); i++)
 	{
-		ASSERT(*nr_maps < BPF_MAPS_MAX + 1);
-		if(!gelf_getsym(symbols, i, &sym[*nr_maps]))
-		{
+		GElf_Sym current;
+		if(!gelf_getsym(symbols, i, &current) || current.st_shndx != maps_shndx)
 			continue;
-		}
-
-		if(sym[*nr_maps].st_shndx != maps_shndx)
+		if(*nr_maps >= BPF_MAPS_MAX)
 		{
-			continue;
+			snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "too many BPF maps (maximum %d)", BPF_MAPS_MAX);
+			free(sym);
+			return SCAP_FAILURE;
 		}
-
+		sym[*nr_maps] = current;
 		(*nr_maps)++;
 	}
 
 	qsort(sym, *nr_maps, sizeof(GElf_Sym), cmp_symbols);
 
-	ASSERT(data_maps->d_size / *nr_maps == sizeof(struct bpf_map_def));
+	if(*nr_maps == 0 || data_maps->d_size / *nr_maps != sizeof(struct bpf_map_def))
+	{
+		snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "invalid BPF maps section");
+		free(sym);
+		return SCAP_FAILURE;
+	}
 
 	for(i = 0; i < *nr_maps; i++)
 	{
 		struct bpf_map_def *def;
 		size_t offset;
+		const char *sym_name;
 
 		offset = sym[i].st_value;
 		def = (struct bpf_map_def *)(data_maps->d_buf + offset);
 		maps[i].elf_offset = offset;
 		memcpy(&maps[i].def, def, sizeof(struct bpf_map_def));
+		maps[i].name[0] = '\0';
+		sym_name = elf_strptr(elf, strtabidx, sym[i].st_name);
+		if(sym_name)
+		{
+			strncpy(maps[i].name, sym_name, sizeof(maps[i].name) - 1);
+			maps[i].name[sizeof(maps[i].name) - 1] = '\0';
+		}
 	}
 
 	free(sym);
@@ -425,37 +457,86 @@ static int32_t load_maps(scap_t *handle, struct bpf_map_data *maps, int nr_maps)
 {
 	int j;
 
+	handle->m_bpf_nr_maps = 0;
+
 	for(j = 0; j < nr_maps; ++j)
 	{
+		int inner_fd = 0;
+
 		if(j == SYSDIG_PERF_MAP ||
 		   j == SYSDIG_LOCAL_STATE_MAP ||
 		   j == SYSDIG_FRAME_SCRATCH_MAP ||
-		   j == SYSDIG_TMP_SCRATCH_MAP)
+		   j == SYSDIG_TMP_SCRATCH_MAP ||
+		   strcmp(maps[j].name, "profile_trace_events") == 0)
 		{
 			maps[j].def.max_entries = handle->m_ncpus;
 		}
 
-		handle->m_bpf_map_fds[j] = bpf_map_create(maps[j].def.type,
+		/*
+		 * HASH/ARRAY_OF_MAPS: template must be the immediately preceding
+		 * map in the maps section (declare template, then outer).
+		 * No absolute inner_map_idx — avoids enum drift.
+		 */
+		if(maps[j].def.type == BPF_MAP_TYPE_HASH_OF_MAPS ||
+		   maps[j].def.type == BPF_MAP_TYPE_ARRAY_OF_MAPS)
+		{
+			if(j < 1 || handle->m_bpf_map_fds[j - 1] <= 0)
+			{
+				snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE,
+					 "HASH_OF_MAPS '%s' needs template map at index %d",
+					 maps[j].name, j - 1);
+				return SCAP_FAILURE;
+			}
+			inner_fd = handle->m_bpf_map_fds[j - 1];
+		}
+
+		handle->m_bpf_map_fds[j] = scap_bpf_map_create(maps[j].def.type,
 							  maps[j].def.key_size,
 							  maps[j].def.value_size,
 							  maps[j].def.max_entries,
-							  maps[j].def.map_flags);
+							  maps[j].def.map_flags,
+							  inner_fd);
 
 		maps[j].fd = handle->m_bpf_map_fds[j];
+		strncpy(handle->m_bpf_map_names[j], maps[j].name,
+			sizeof(handle->m_bpf_map_names[j]) - 1);
+		handle->m_bpf_map_names[j][sizeof(handle->m_bpf_map_names[j]) - 1] = '\0';
 
 		if(handle->m_bpf_map_fds[j] < 0)
 		{
-			snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "can't create map: %s", scap_strerror(handle, errno));
+			snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "can't create map %s: %s",
+				 maps[j].name, scap_strerror(handle, errno));
 			return SCAP_FAILURE;
 		}
 
-		if(maps[j].def.type == BPF_MAP_TYPE_PROG_ARRAY)
+		if(maps[j].def.type == BPF_MAP_TYPE_PROG_ARRAY && j == SYSDIG_TAIL_MAP)
 		{
 			handle->m_bpf_prog_array_map_idx = j;
 		}
 	}
 
+	handle->m_bpf_nr_maps = nr_maps;
 	return SCAP_SUCCESS;
+}
+
+int scap_bpf_map_fd_by_name(scap_t *handle, const char *name)
+{
+	int j;
+
+	if(!handle || !name)
+	{
+		return -1;
+	}
+
+	for(j = 0; j < handle->m_bpf_nr_maps; ++j)
+	{
+		if(strcmp(handle->m_bpf_map_names[j], name) == 0)
+		{
+			return handle->m_bpf_map_fds[j];
+		}
+	}
+
+	return -1;
 }
 
 #ifndef MINIMAL_BUILD
@@ -699,7 +780,6 @@ static int32_t load_tracepoint(scap_t* handle, const char *event, struct bpf_ins
 	handle->m_bpf_prog_cnt++;
 	//printf("prog_type:%d, insns_cnt:%d, license: %s, fd: %d\n", program_type, insns_cnt, license, fd);
 
-
 	if(memcmp(event, "filler/", sizeof("filler/") - 1) == 0)
 	{
 		int prog_id;
@@ -730,6 +810,39 @@ static int32_t load_tracepoint(scap_t* handle, const char *event, struct bpf_ins
 		return SCAP_SUCCESS;
 	}
 
+	if(strncmp(full_event, "perf_event/profile_", 19) == 0)
+	{
+		int prog_id = -1;
+		int progs_fd;
+
+		if(strcmp(full_event, "perf_event/profile_unwind_stop") == 0)
+			prog_id = PROFILE_PROG_UNWIND_STOP;
+		else if(strcmp(full_event, "perf_event/profile_unwind_native") == 0)
+			prog_id = PROFILE_PROG_UNWIND_NATIVE;
+		else if(strcmp(full_event, "perf_event/profile_unwind_python") == 0)
+			prog_id = PROFILE_PROG_UNWIND_PYTHON;
+
+		if(prog_id < 0)
+		{
+			snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "unknown profile unwind section: %s", full_event);
+			return SCAP_FAILURE;
+		}
+
+		progs_fd = scap_bpf_map_fd_by_name(handle, PROFILE_MAP_PROGS);
+		if(progs_fd < 0)
+		{
+			snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "%s map not found", PROFILE_MAP_PROGS);
+			return SCAP_FAILURE;
+		}
+
+		err = bpf_map_update_elem(progs_fd, &prog_id, &fd, BPF_ANY);
+		if(err < 0)
+		{
+			snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "failure populating %s: %s", PROFILE_MAP_PROGS, scap_strerror(handle, errno));
+			return SCAP_FAILURE;
+		}
+		return SCAP_SUCCESS;
+	}
 	if(is_perf_event)
 	{
 		return attach_perf_event_prog(handle, fd, 97);
@@ -1005,13 +1118,10 @@ cleanup:
 static void *perf_event_mmap(scap_t *handle, int fd)
 {
 	int page_size = getpagesize();
-	int ring_size = page_size * BUF_SIZE_PAGES;
+	/* One metadata page, a power-of-two data ring, and wraparound scratch. */
+	int ring_size = page_size * (handle->m_buf_size_pages ? handle->m_buf_size_pages : BUF_SIZE_PAGES);
 	int header_size = page_size;
-	int total_size = ring_size * 2 + header_size;
-
-	//
-	// All this playing with MAP_FIXED might be very very wrong, revisit
-	//
+	int total_size = ring_size + header_size + RINGBUFFER_SLACK;
 
 	void *tmp = mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 	if(tmp == MAP_FAILED)
@@ -1020,8 +1130,7 @@ static void *perf_event_mmap(scap_t *handle, int fd)
 		return MAP_FAILED;
 	}
 
-	// Map the second copy to allow us to handle the wrap case normally
-	void *p1 = mmap(tmp + ring_size, ring_size + header_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0);
+	void *p1 = mmap(tmp, ring_size + header_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0);
 	if(p1 == MAP_FAILED)
 	{
 		snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "mmap (2): %s", scap_strerror(handle, errno));
@@ -1029,18 +1138,7 @@ static void *perf_event_mmap(scap_t *handle, int fd)
 		return MAP_FAILED;
 	}
 
-	ASSERT(p1 == tmp + ring_size);
-
-	// Map the main copy
-	void *p2 = mmap(tmp, ring_size + header_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0);
-	if(p2 == MAP_FAILED)
-	{
-		snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "mmap (3): %s", scap_strerror(handle, errno));
-		munmap(tmp, total_size);
-		return MAP_FAILED;
-	}
-
-	ASSERT(p2 == tmp);
+	ASSERT(p1 == tmp);
 
 	return tmp;
 }
@@ -1422,9 +1520,9 @@ int32_t scap_bpf_close(scap_t *handle)
 	int j;
 
 	int page_size = getpagesize();
-	int ring_size = page_size * BUF_SIZE_PAGES;
+	int ring_size = page_size * (handle->m_buf_size_pages ? handle->m_buf_size_pages : BUF_SIZE_PAGES);
 	int header_size = page_size;
-	int total_size = ring_size * 2 + header_size;
+	int total_size = ring_size + header_size + RINGBUFFER_SLACK;
 
 	for(j = 0; j < handle->m_ndevs; j++)
 	{
@@ -1439,7 +1537,7 @@ int32_t scap_bpf_close(scap_t *handle)
 			ASSERT(ret == 0);
 		}
 
-		if(handle->m_devs[j].m_fd > 0)
+		if(handle->m_devs[j].m_fd >= 0)
 		{
 			close(handle->m_devs[j].m_fd);
 		}
@@ -1465,6 +1563,8 @@ int32_t scap_bpf_close(scap_t *handle)
 		}
 	}
 
+	memset(handle->m_bpf_map_names, 0, sizeof(handle->m_bpf_map_names));
+	handle->m_bpf_nr_maps = 0;
 	handle->m_bpf_prog_cnt = 0;
 	handle->m_bpf_prog_array_map_idx = -1;
 
@@ -1704,57 +1804,10 @@ static int32_t set_default_settings(scap_t *handle)
 	return SCAP_SUCCESS;
 }
 
-int32_t scap_bpf_load(scap_t *handle, const char *bpf_probe)
+static int32_t set_device_perfmap(scap_t *handle, int *online_cpu_count, int perf_map_fd)
 {
-#ifdef MINIMAL_BUILD
-	snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "The eBPF probe driver is not supported when using a minimal build");
-	return SCAP_FAILURE;
-#else
-	int online_cpu;
+	int online_cpu = 0;
 	int j;
-
-	if(set_runtime_params(handle) != SCAP_SUCCESS)
-	{
-		return SCAP_FAILURE;
-	}
-
-	handle->m_bpf_prog_array_map_idx = -1;
-
-	if(!bpf_probe)
-	{
-		ASSERT(false);
-		return SCAP_FAILURE;
-	}
-	snprintf(handle->m_filepath, SCAP_MAX_PATH_SIZE, "%s", bpf_probe);
-	if(load_bpf_file(handle) != SCAP_SUCCESS)
-	{
-		return SCAP_FAILURE;
-	}
-
-	if(populate_syscall_routing_table_map(handle) != SCAP_SUCCESS)
-	{
-		return SCAP_FAILURE;
-	}
-
-	if(populate_syscall_table_map(handle) != SCAP_SUCCESS)
-	{
-		return SCAP_FAILURE;
-	}
-
-	if(populate_event_table_map(handle) != SCAP_SUCCESS)
-	{
-		return SCAP_FAILURE;
-	}
-
-	if(populate_fillers_table_map(handle) != SCAP_SUCCESS)
-	{
-		return SCAP_FAILURE;
-	}
-
-	//
-	// Open and initialize all the devices
-	//
-	online_cpu = 0;
 	for(j = 0; j < handle->m_ncpus; ++j)
 	{
 		struct perf_event_attr attr = {
@@ -1810,9 +1863,9 @@ int32_t scap_bpf_load(scap_t *handle, const char *bpf_probe)
 
 		handle->m_devs[online_cpu].m_fd = pmu_fd;
 
-		if(bpf_map_update_elem(handle->m_bpf_map_fds[SYSDIG_PERF_MAP], &j, &pmu_fd, BPF_ANY) != 0)
+		if(bpf_map_update_elem(perf_map_fd, &j, &pmu_fd, BPF_ANY) != 0)
 		{
-			snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "SYSDIG_PERF_MAP bpf_map_update_elem < 0: %s", scap_strerror(handle, errno));
+			snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "perf map bpf_map_update_elem < 0: %s", scap_strerror(handle, errno));
 			return SCAP_FAILURE;
 		}
 
@@ -1832,6 +1885,79 @@ int32_t scap_bpf_load(scap_t *handle, const char *bpf_probe)
 		}
 
 		++online_cpu;
+	}
+	*online_cpu_count = online_cpu;
+	return SCAP_SUCCESS;
+}
+
+int32_t mini_scap_perf_mmap(scap_t *handle, int perf_map_fd)
+{
+	int online_cpu;
+	if(set_device_perfmap(handle, &online_cpu, perf_map_fd) != SCAP_SUCCESS)
+	{
+		return SCAP_FAILURE;
+	}
+	if(online_cpu != handle->m_ndevs)
+	{
+		snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "processors online: %d, expected: %d", online_cpu, handle->m_ndevs);
+		return SCAP_FAILURE;
+	}
+	return SCAP_SUCCESS;
+}
+
+int32_t scap_bpf_load(scap_t *handle, const char *bpf_probe)
+{
+#ifdef MINIMAL_BUILD
+	snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "The eBPF probe driver is not supported when using a minimal build");
+	return SCAP_FAILURE;
+#else
+	int online_cpu;
+	int j;
+
+	if(set_runtime_params(handle) != SCAP_SUCCESS)
+	{
+		return SCAP_FAILURE;
+	}
+
+	handle->m_bpf_prog_array_map_idx = -1;
+
+	if(!bpf_probe)
+	{
+		ASSERT(false);
+		return SCAP_FAILURE;
+	}
+	snprintf(handle->m_filepath, SCAP_MAX_PATH_SIZE, "%s", bpf_probe);
+	if(load_bpf_file(handle) != SCAP_SUCCESS)
+	{
+		return SCAP_FAILURE;
+	}
+
+	if(populate_syscall_routing_table_map(handle) != SCAP_SUCCESS)
+	{
+		return SCAP_FAILURE;
+	}
+
+	if(populate_syscall_table_map(handle) != SCAP_SUCCESS)
+	{
+		return SCAP_FAILURE;
+	}
+
+	if(populate_event_table_map(handle) != SCAP_SUCCESS)
+	{
+		return SCAP_FAILURE;
+	}
+
+	if(populate_fillers_table_map(handle) != SCAP_SUCCESS)
+	{
+		return SCAP_FAILURE;
+	}
+
+	//
+	// Open and initialize all the devices
+	//
+	if(set_device_perfmap(handle, &online_cpu, handle->m_bpf_map_fds[SYSDIG_PERF_MAP]) != SCAP_SUCCESS)
+	{
+		return SCAP_FAILURE;
 	}
 
 	if(online_cpu != handle->m_ndevs)
@@ -2000,100 +2126,6 @@ int32_t scap_bpf_set_cpu_sampling(scap_t *handle, uint32_t start)
 		snprintf(handle->m_lasterr, SCAP_LASTERR_SIZE, "failure set cpu sampling: %s", scap_strerror(handle, errno));
 		return SCAP_FAILURE;
 	}
-	return SCAP_SUCCESS;
-}
-
-int32_t scap_bpf_get_profile_data(scap_t *handle, struct sample_key key, struct bpf_profile_data *profile_data)
-{
-	int count_map = handle->m_bpf_map_fds[PROFILE_CPU_COUNTS];
-	int stack_map = handle->m_bpf_map_fds[PROFILE_CPU_STACKS];
-
-	profile_data->pid = key.pid;
-	bpf_map_lookup_elem(count_map, &key, &(profile_data->count));
-	bpf_map_lookup_elem(stack_map, &(key.kernel_stack_id), profile_data->kernel_stack);
-	bpf_map_lookup_elem(stack_map, &(key.user_stack_id), profile_data->user_stack);
-
-	bpf_map_delete_elem(stack_map, &(key.user_stack_id));
-	bpf_map_delete_elem(stack_map, &(key.kernel_stack_id));
-	bpf_map_delete_elem(count_map, &key);
-	return SCAP_SUCCESS;
-}
-
-int32_t scap_bpf_get_profile_keys(scap_t *handle, struct sample_key_set *set)
-{
-	int count_map = handle->m_bpf_map_fds[PROFILE_CPU_COUNTS];
-	size_t capacity = 1000;
-	struct sample_key key, next_key;
-	__u32 count = 0;
-
-	if(set->keys != NULL)
-		free(set->keys);
-	set->nr_keys = 0;
-	set->keys = malloc(sizeof(struct sample_key) * capacity);
-	if(!set->keys)
-		return SCAP_FAILURE;
-
-	if(bpf_map_get_next_key(count_map, NULL, &next_key) == 0)
-	{
-		do
-		{
-			key = next_key;
-			if(count >= capacity)
-			{
-				capacity *= 2;
-				void *tmp = realloc(set->keys, sizeof(struct sample_key) * capacity);
-				if(!tmp)
-				{
-					free(set->keys);
-					set->keys = NULL;
-					set->nr_keys = 0;
-					return SCAP_FAILURE;
-				}
-				set->keys = tmp;
-			}
-			memcpy(&set->keys[count++], &key, sizeof(struct sample_key));
-		} while(bpf_map_get_next_key(count_map, &key, &next_key) == 0);
-	}
-	set->nr_keys = count;
-	return SCAP_SUCCESS;
-}
-
-int32_t scap_bpf_clear_profile_map(scap_t *handle)
-{
-	int count_map = handle->m_bpf_map_fds[PROFILE_CPU_COUNTS];
-	int stack_map = handle->m_bpf_map_fds[PROFILE_CPU_STACKS];
-	struct sample_key key, next_key;
-
-	if(bpf_map_get_next_key(count_map, NULL, &key) != 0)
-		return SCAP_SUCCESS;
-
-	while(bpf_map_get_next_key(count_map, &key, &next_key) == 0)
-	{
-		bpf_map_delete_elem(count_map, &key);
-		bpf_map_delete_elem(stack_map, &(key.kernel_stack_id));
-		bpf_map_delete_elem(stack_map, &(key.user_stack_id));
-		key = next_key;
-	}
-	bpf_map_delete_elem(count_map, &key);
-	bpf_map_delete_elem(stack_map, &(key.kernel_stack_id));
-	bpf_map_delete_elem(stack_map, &(key.user_stack_id));
-	return SCAP_SUCCESS;
-}
-
-int32_t scap_bpf_clear_stacks_map(scap_t *handle)
-{
-	int stack_map = handle->m_bpf_map_fds[PROFILE_CPU_STACKS];
-	uint32_t key, next_key;
-
-	if(bpf_map_get_next_key(stack_map, NULL, &key) != 0)
-		return SCAP_SUCCESS;
-
-	while(bpf_map_get_next_key(stack_map, &key, &next_key) == 0)
-	{
-		bpf_map_delete_elem(stack_map, &key);
-		key = next_key;
-	}
-	bpf_map_delete_elem(stack_map, &key);
 	return SCAP_SUCCESS;
 }
 
